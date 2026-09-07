@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PC-to-PC Notification POC</title>
+  <link rel="stylesheet" href="style.css?v=2.0">
+  <!-- Socket.IO Client Library -->
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-content">
+        <h1>PC-to-PC Notification POC</h1>
+        <p class="header-subtitle">Real-time cross-device notifications over local HTTPS</p>
+      </div>
+      
+      <!-- Top Status Indicators -->
+      <div class="status-bar">
+        <div id="connectionStatus" class="status-badge disconnected">
+          <span class="status-dot"></span>
+          <span id="connectionText">Disconnected</span>
+        </div>
+        <div id="deviceCountBadge" class="status-badge device-count-solo">
+          <span id="deviceCountText">👥 1 Device Online</span>
+        </div>
+        <div id="permissionStatus" class="status-badge permission-default">
+          <span id="permissionText">Permission: Default</span>
+        </div>
+        <button id="enableNotifBtn" class="btn btn-sm btn-outline">
+          🔔 Enable Notifications
+        </button>
+        <button id="testPopupBtn" class="btn btn-sm btn-primary" style="display: none;">
+          🧪 Test Desktop Popup
+        </button>
+        <a href="/download-cert" class="btn btn-sm btn-outline" download title="Install to PC B Trusted Root for native Windows popups">
+          🔒 Download SSL Cert
+        </a>
+      </div>
+    </header>
+
+    <!-- Alert / System Notice Banner (if any) -->
+    <div id="alertBanner" class="alert-banner hidden"></div>
+
+    <!-- Live Diagnostics Strip -->
+    <div class="debug-strip">
+      <div class="debug-item">
+        <span class="debug-label">Socket ID:</span>
+        <code id="debugSocketId">connecting...</code>
+      </div>
+      <div class="debug-item">
+        <span class="debug-label">Transport:</span>
+        <code id="debugTransport">polling</code>
+      </div>
+      <div class="debug-item debug-event-item">
+        <span class="debug-label">Last Stream Event:</span>
+        <span id="debugLastEvent">Listening for events...</span>
+      </div>
+    </div>
+
+    <!-- Main Dual Section Grid: Sender and Receiver -->
+    <main class="main-grid">
+      <!-- Section 1: Sender -->
+      <section class="section-card sender-section">
+        <div class="section-header">
+          <div class="icon-bubble icon-sender">📤</div>
+          <div>
+            <h2>Send Notification</h2>
+            <p class="section-desc">Broadcast an instant alert to PC B</p>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="messageInput">Notification Message</label>
+          <input 
+            type="text" 
+            id="messageInput" 
+            value="Hello! This notification was sent from another PC." 
+            placeholder="Type your message here..."
+            autocomplete="off"
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="senderNameInput">Sender Name / PC Label (Optional)</label>
+          <input 
+            type="text" 
+            id="senderNameInput" 
+            placeholder="e.g. PC A (Office)"
+          />
+        </div>
+
+        <button id="sendBtn" class="btn btn-primary btn-large">
+          <span class="btn-icon">⚡</span> Send Notification
+        </button>
+
+        <div class="quick-messages">
+          <span class="quick-label">Quick test messages:</span>
+          <div class="quick-tags">
+            <button class="tag-btn" data-msg="Hello! This notification was sent from another PC.">Hello from PC A</button>
+            <button class="tag-btn" data-msg="🚨 Urgent: Server health alert triggered!">Server Alert</button>
+            <button class="tag-btn" data-msg="✅ Task Completed successfully.">Task Done</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 2: Receiver -->
+      <section class="section-card receiver-section">
+        <div class="section-header">
+          <div class="icon-bubble icon-receiver">🔔</div>
+          <div class="receiver-title-area">
+            <div>
+              <h2>Received Notifications</h2>
+              <p class="section-desc">Real-time incoming alerts from Socket.IO</p>
+            </div>
+            <button id="clearListBtn" class="btn btn-xs btn-text">Clear</button>
+          </div>
+        </div>
+
+        <div id="notificationsList" class="notifications-list">
+          <div id="emptyState" class="empty-state">
+            <div class="empty-icon">📭</div>
+            <p>No notifications received yet.</p>
+            <span>Messages sent from any connected PC will appear here instantly.</span>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Troubleshooting helper for Windows OS popups -->
+    <div class="troubleshoot-box">
+      <div class="troubleshoot-title">⚙️ Check on PC B (2nd System):</div>
+      <div class="troubleshoot-grid">
+        <div class="troubleshoot-item">
+          <strong>1. Connected status</strong>
+          <p>Does PC B show <code>● Connected</code> and <code>👥 2 Devices Online</code>? If it says 1, PC B is not yet reaching the server.</p>
+        </div>
+        <div class="troubleshoot-item">
+          <strong>2. Notification Permission</strong>
+          <p>Click <strong>🔔 Enable Notifications</strong> and select <strong>Allow</strong> so desktop popups can fire.</p>
+        </div>
+        <div class="troubleshoot-item">
+          <strong>3. Windows Do Not Disturb</strong>
+          <p>Turn off <strong>Do Not Disturb / Focus Assist</strong> in Windows taskbar so popup banners aren't hidden in the notification center.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer Instructions -->
+    <footer class="app-footer">
+      <div class="footer-step">
+        <span class="step-num">1</span>
+        <span>Open on <strong>PC A</strong> & <strong>PC B</strong> via HTTPS LAN IP</span>
+      </div>
+      <div class="footer-step">
+        <span class="step-num">2</span>
+        <span>Click <strong>Enable Notifications</strong> on PC B</span>
+      </div>
+      <div class="footer-step">
+        <span class="step-num">3</span>
+        <span>Click <strong>Send Notification</strong> on PC A</span>
+      </div>
+    </footer>
+  </div>
+
+  <div id="toastContainer" class="toast-container"></div>
+
+  <script src="app.js?v=2.0"></script>
+</body>
+</html>

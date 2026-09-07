@@ -1,0 +1,19 @@
+{
+  "name": "notification-poc",
+  "version": "1.0.0",
+  "description": "Proof of Concept for Real-Time PC-to-PC Browser Notifications over HTTPS",
+  "main": "server.js",
+  "scripts": {
+    "generate-cert": "node generate-cert.js",
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": ["notification", "socket.io", "https", "poc"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.21.2",
+    "selfsigned": "^2.4.1",
+    "socket.io": "^4.8.1"
+  }
+}
