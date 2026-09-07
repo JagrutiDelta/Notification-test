@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 const https = require('https');
 const os = require('os');
 const express = require('express');
@@ -12,19 +13,10 @@ const app = express();
 const keyPath = path.join(__dirname, 'cert', 'server.key');
 const certPath = path.join(__dirname, 'cert', 'server.crt');
 
-// Verify certificates exist
-if (!fs.existsSync(keyPath) || !fs.existsSync(certPath)) {
-  console.error('\n❌ Error: SSL certificates not found in ./cert directory.');
-  console.error('👉 Run "npm run generate-cert" to create them automatically.\n');
-  process.exit(1);
-}
+const isVercel = process.env.VERCEL === '1' || process.env.NOW_REGION !== undefined;
+const hasLocalCerts = fs.existsSync(keyPath) && fs.existsSync(certPath);
 
-const httpsOptions = {
-  key: fs.readFileSync(keyPath),
-  cert: fs.readFileSync(certPath)
-};
-
-// Disable browser caching completely for POC testing
+// Disable browser caching for POC testing
 app.use((req, res, next) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
@@ -37,22 +29,48 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
-// Endpoint to download the SSL Certificate directly on PC B
+// Endpoint to download the SSL Certificate directly on PC B (if exists)
 app.get(['/download-cert', '/cert'], (req, res) => {
-  res.download(certPath, 'server.crt');
+  if (hasLocalCerts) {
+    res.download(certPath, 'server.crt');
+  } else {
+    res.status(404).send('Certificate file not available on cloud server.');
+  }
 });
 
 // API Status endpoint for testing connectivity via HTTP
 app.get('/api/status', (req, res) => {
   res.json({
     status: 'ok',
+    environment: isVercel ? 'vercel' : (hasLocalCerts ? 'local-https' : 'http'),
     serverTime: new Date().toISOString(),
-    connectedClients: io.engine ? io.engine.clientsCount : 0
+    connectedClients: io && io.engine ? io.engine.clientsCount : 0
   });
 });
 
-// Create HTTPS Server
-const server = https.createServer(httpsOptions, app);
+// Support legacy URLs (receiver.html, sender.html) by routing to public files
+app.get(['/receiver', '/sender'], (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Create Server (HTTPS for local with certs, HTTP for Cloud/Vercel/Render where cloud handles SSL)
+let server;
+if (!isVercel && hasLocalCerts) {
+  try {
+    const httpsOptions = {
+      key: fs.readFileSync(keyPath),
+      cert: fs.readFileSync(certPath)
+    };
+    server = https.createServer(httpsOptions, app);
+    console.log('[INFO] Starting server with Local HTTPS.');
+  } catch (err) {
+    console.warn('[WARN] Failed to load SSL certs, falling back to HTTP:', err.message);
+    server = http.createServer(app);
+  }
+} else {
+  server = http.createServer(app);
+  console.log('[INFO] Starting standard HTTP server (Cloud/Proxy handles SSL).');
+}
 
 // Initialize Socket.IO with CORS and robust polling/websocket transports
 const io = new Server(server, {
@@ -79,17 +97,18 @@ function getLocalIPAddresses() {
 }
 
 function broadcastClientCount() {
-  const count = io.engine ? io.engine.clientsCount : 0;
-  io.emit('client_count', { count });
+  if (io && io.engine) {
+    const count = io.engine.clientsCount;
+    io.emit('client_count', { count });
+  }
 }
 
 // Socket.IO real-time event handling
 io.on('connection', (socket) => {
   const clientIp = socket.handshake.address;
-  const total = io.engine.clientsCount;
+  const total = io.engine ? io.engine.clientsCount : 1;
   console.log(`\n[+] Client Connected: ${socket.id} | IP: ${clientIp} | Total Online: ${total}`);
   
-  // Send immediate welcome & status to newly connected client
   socket.emit('connection_ack', {
     socketId: socket.id,
     clientIp: clientIp,
@@ -97,12 +116,10 @@ io.on('connection', (socket) => {
     serverTime: new Date().toLocaleTimeString()
   });
 
-  // Broadcast updated count to all clients
   broadcastClientCount();
 
-  // Handler for notification dispatch
   const handleSendNotification = (data) => {
-    const totalClients = io.engine.clientsCount;
+    const totalClients = io.engine ? io.engine.clientsCount : 1;
     const now = new Date();
     const timestamp = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     
@@ -121,7 +138,6 @@ io.on('connection', (socket) => {
     console.log(`[>] Message       : "${payload.message}"`);
     console.log(`[>] Broadcasting to: ${totalClients} connected client(s)`);
 
-    // Broadcast to EVERY connected client
     io.emit('notification', payload);
     io.emit('receive_notification', payload);
     
@@ -129,34 +145,36 @@ io.on('connection', (socket) => {
     console.log(`====================================================\n`);
   };
 
-  // Support all event names
   socket.on('send-notification', handleSendNotification);
   socket.on('send_notification', handleSendNotification);
   socket.on('message', handleSendNotification);
 
   socket.on('disconnect', (reason) => {
-    console.log(`[-] Client Disconnected: ${socket.id} | Reason: ${reason} | Remaining Online: ${io.engine.clientsCount}`);
+    console.log(`[-] Client Disconnected: ${socket.id} | Reason: ${reason}`);
     broadcastClientCount();
   });
 });
 
-// Start HTTPS Server
-server.listen(PORT, '0.0.0.0', () => {
-  const localIPs = getLocalIPAddresses();
-  console.log('\n========================================================');
-  console.log('🚀 PC-to-PC Notification POC Server is Running (HTTPS)!');
-  console.log('========================================================');
-  console.log(`\n💻 Local Machine (PC A):`);
-  console.log(`   👉 https://localhost:${PORT}`);
+// Start Server if not imported as serverless function
+if (!isVercel) {
+  server.listen(PORT, '0.0.0.0', () => {
+    const localIPs = getLocalIPAddresses();
+    const protocol = hasLocalCerts ? 'https' : 'http';
+    console.log('\n========================================================');
+    console.log(`🚀 Notification POC Server Running on Port ${PORT}!`);
+    console.log('========================================================');
+    console.log(`\n💻 Local Machine (PC A):`);
+    console.log(`   👉 ${protocol}://localhost:${PORT}`);
 
-  if (localIPs.length > 0) {
-    console.log(`\n🌐 Remote Machine (PC B on same Wi-Fi / Local Network):`);
-    localIPs.forEach((ip) => {
-      console.log(`   👉 https://${ip.address}:${PORT}  (${ip.name})`);
-    });
-  } else {
-    console.log('\n⚠️ No external LAN IP detected. Make sure you are connected to Wi-Fi/Ethernet.');
-  }
+    if (localIPs.length > 0) {
+      console.log(`\n🌐 Remote Machine (PC B on same Wi-Fi / Local Network):`);
+      localIPs.forEach((ip) => {
+        console.log(`   👉 ${protocol}://${ip.address}:${PORT}  (${ip.name})`);
+      });
+    }
+    console.log('\n========================================================\n');
+  });
+}
 
-  console.log('\n========================================================\n');
-});
+// Export for Vercel / Serverless environments
+module.exports = app;
