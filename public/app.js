@@ -34,56 +34,98 @@ if ('serviceWorker' in navigator) {
     });
 }
 
-// Initialize Socket.IO connection with polling first then upgrade
-const socket = io({
-  transports: ['polling', 'websocket'],
-  reconnection: true,
-  reconnectionAttempts: Infinity,
-  reconnectionDelay: 1000,
-  reconnectionDelayMax: 5000,
-  timeout: 20000
-});
+// Check if Socket.IO is loaded
+let socket = null;
+let useServerlessFallback = false;
+let lastPolledTimestamp = 0;
+
+if (typeof io !== 'undefined') {
+  try {
+    socket = io({
+      transports: ['polling', 'websocket'],
+      reconnection: true,
+      reconnectionAttempts: 3,
+      timeout: 5000
+    });
+  } catch (e) {
+    console.warn('Socket.IO init failed, switching to Serverless REST mode');
+    startServerlessMode();
+  }
+} else {
+  startServerlessMode();
+}
+
+// Fallback for Vercel / Stateless Serverless
+function startServerlessMode() {
+  useServerlessFallback = true;
+  setConnectionState(true);
+  if (debugTransport) debugTransport.textContent = 'REST / Serverless';
+  if (debugSocketId) debugSocketId.textContent = 'serverless-client';
+  updateDeviceCount('Cloud');
+
+  // Poll /api every 2.5 seconds
+  setInterval(async () => {
+    try {
+      const res = await fetch(`/api?since=${lastPolledTimestamp}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.notifications && data.notifications.length > 0) {
+          data.notifications.reverse().forEach(n => {
+            const ts = parseInt(n.id.split('_')[1]) || Date.now();
+            if (ts > lastPolledTimestamp) {
+              lastPolledTimestamp = ts;
+              handleIncomingNotification(n);
+            }
+          });
+        }
+      }
+    } catch (err) {}
+  }, 2500);
+}
 
 // ==========================================
 // 1. Connection Lifecycle
 // ==========================================
-socket.on('connect', () => {
-  console.log(`[CONNECTED] Socket ID: ${socket.id} | Transport: ${socket.io.engine.transport.name}`);
-  setConnectionState(true);
-  hideAlertBanner();
-  
-  if (debugSocketId) debugSocketId.textContent = socket.id;
-  if (debugTransport) debugTransport.textContent = socket.io.engine.transport.name;
-
-  socket.io.engine.on('upgrade', () => {
-    console.log(`[UPGRADE] Transport upgraded to: ${socket.io.engine.transport.name}`);
+if (socket) {
+  socket.on('connect', () => {
+    console.log(`[CONNECTED] Socket ID: ${socket.id} | Transport: ${socket.io.engine.transport.name}`);
+    setConnectionState(true);
+    hideAlertBanner();
+    
+    if (debugSocketId) debugSocketId.textContent = socket.id;
     if (debugTransport) debugTransport.textContent = socket.io.engine.transport.name;
+
+    socket.io.engine.on('upgrade', () => {
+      console.log(`[UPGRADE] Transport upgraded to: ${socket.io.engine.transport.name}`);
+      if (debugTransport) debugTransport.textContent = socket.io.engine.transport.name;
+    });
   });
-});
 
-socket.on('connection_ack', (data) => {
-  console.log('[SERVER ACK]', data);
-  if (data.totalClients !== undefined) {
-    updateDeviceCount(data.totalClients);
-  }
-});
+  socket.on('connection_ack', (data) => {
+    console.log('[SERVER ACK]', data);
+    if (data.totalClients !== undefined) {
+      updateDeviceCount(data.totalClients);
+    }
+  });
 
-socket.on('disconnect', (reason) => {
-  console.warn(`[DISCONNECTED] Reason: ${reason}`);
-  setConnectionState(false);
-  updateDeviceCount(0);
-});
+  socket.on('disconnect', (reason) => {
+    console.warn(`[DISCONNECTED] Reason: ${reason}`);
+    setConnectionState(false);
+    updateDeviceCount(0);
+  });
 
-socket.on('connect_error', (error) => {
-  console.error('[CONNECTION ERROR]', error);
-  setConnectionState(false);
-  showAlertBanner(`⚠️ Connection Error: ${error.message || 'Cannot reach server'}. Check IP & Firewall.`, 'danger');
-});
+  socket.on('connect_error', (error) => {
+    console.warn('[SOCKET ERROR] Switching to Serverless fallback mode...');
+    if (!useServerlessFallback) {
+      startServerlessMode();
+    }
+  });
 
-socket.on('client_count', (data) => {
-  console.log('[CLIENT COUNT]', data);
-  updateDeviceCount(data.count);
-});
+  socket.on('client_count', (data) => {
+    console.log('[CLIENT COUNT]', data);
+    updateDeviceCount(data.count);
+  });
+}
 
 function updateDeviceCount(count) {
   if (!deviceCountBadge || !deviceCountText) return;
@@ -180,24 +222,38 @@ if (testPopupBtn) {
 // ==========================================
 // 3. Send Notification Flow (PC A)
 // ==========================================
-function sendNotification() {
+async function sendNotification() {
   const message = messageInput.value.trim() || 'Hello! This notification was sent from another PC.';
   const sender = senderNameInput.value.trim() || 'PC A';
 
-  if (!socket.connected) {
-    showAlertBanner('❌ Cannot send: Server is disconnected. Check network connection.', 'danger');
-    return;
+  if (useServerlessFallback || !socket || !socket.connected) {
+    // Send via Serverless REST API
+    try {
+      const res = await fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, sender })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.notification) {
+          handleIncomingNotification(data.notification);
+        }
+      }
+    } catch (err) {
+      console.error('Serverless send error:', err);
+    }
+  } else {
+    // Emit 'send-notification' event to the Socket.IO server
+    socket.emit('send-notification', {
+      message: message,
+      sender: sender
+    });
   }
-
-  // Emit 'send-notification' event to the server
-  socket.emit('send-notification', {
-    message: message,
-    sender: sender
-  });
 
   // Visual feedback
   const originalHtml = sendBtn.innerHTML;
-  sendBtn.innerHTML = '<span>✓</span> Sent to PC B!';
+  sendBtn.innerHTML = '<span>✓</span> Sent!';
   sendBtn.style.backgroundColor = '#10b981';
   setTimeout(() => {
     sendBtn.innerHTML = originalHtml;
