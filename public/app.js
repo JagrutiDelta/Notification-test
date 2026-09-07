@@ -8,8 +8,12 @@ const permissionTextEl = document.getElementById('permissionText');
 const enableNotifBtn = document.getElementById('enableNotifBtn');
 const alertBannerEl = document.getElementById('alertBanner');
 
+const myDeviceNameInput = document.getElementById('myDeviceName');
+const saveNameBtn = document.getElementById('saveNameBtn');
+const onlineDevicesChips = document.getElementById('onlineDevicesChips');
+const targetRecipientSelect = document.getElementById('targetRecipientSelect');
+
 const messageInput = document.getElementById('messageInput');
-const senderNameInput = document.getElementById('senderNameInput');
 const sendBtn = document.getElementById('sendBtn');
 const notificationsList = document.getElementById('notificationsList');
 const emptyState = document.getElementById('emptyState');
@@ -34,6 +38,12 @@ if ('serviceWorker' in navigator) {
     });
 }
 
+// Device Name management
+let currentDeviceName = localStorage.getItem('my_device_name') || '';
+if (myDeviceNameInput) {
+  myDeviceNameInput.value = currentDeviceName;
+}
+
 // Check if Socket.IO is loaded
 let socket = null;
 let useServerlessFallback = false;
@@ -44,8 +54,10 @@ if (typeof io !== 'undefined') {
     socket = io({
       transports: ['polling', 'websocket'],
       reconnection: true,
-      reconnectionAttempts: 3,
-      timeout: 5000
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000
     });
   } catch (e) {
     console.warn('Socket.IO init failed, switching to Serverless REST mode');
@@ -63,7 +75,6 @@ function startServerlessMode() {
   if (debugSocketId) debugSocketId.textContent = 'serverless-client';
   updateDeviceCount('Cloud');
 
-  // Poll /api every 2.5 seconds
   setInterval(async () => {
     try {
       const res = await fetch(`/api?since=${lastPolledTimestamp}`);
@@ -84,7 +95,7 @@ function startServerlessMode() {
 }
 
 // ==========================================
-// 1. Connection Lifecycle
+// 1. Connection Lifecycle & Online Devices
 // ==========================================
 if (socket) {
   socket.on('connect', () => {
@@ -95,6 +106,11 @@ if (socket) {
     if (debugSocketId) debugSocketId.textContent = socket.id;
     if (debugTransport) debugTransport.textContent = socket.io.engine.transport.name;
 
+    // Send saved custom device name to server
+    if (currentDeviceName) {
+      socket.emit('set_device_name', { name: currentDeviceName });
+    }
+
     socket.io.engine.on('upgrade', () => {
       console.log(`[UPGRADE] Transport upgraded to: ${socket.io.engine.transport.name}`);
       if (debugTransport) debugTransport.textContent = socket.io.engine.transport.name;
@@ -103,28 +119,85 @@ if (socket) {
 
   socket.on('connection_ack', (data) => {
     console.log('[SERVER ACK]', data);
-    if (data.totalClients !== undefined) {
-      updateDeviceCount(data.totalClients);
+    if (!currentDeviceName && data.assignedName) {
+      currentDeviceName = data.assignedName;
+      if (myDeviceNameInput) myDeviceNameInput.value = currentDeviceName;
     }
+  });
+
+  // Receive live list of all connected devices
+  socket.on('online_devices', (data) => {
+    console.log('[ONLINE DEVICES]', data);
+    renderOnlineDevices(data.devices || []);
   });
 
   socket.on('disconnect', (reason) => {
     console.warn(`[DISCONNECTED] Reason: ${reason}`);
     setConnectionState(false);
     updateDeviceCount(0);
+    renderOnlineDevices([]);
   });
 
   socket.on('connect_error', (error) => {
-    console.warn('[SOCKET ERROR] Switching to Serverless fallback mode...');
-    if (!useServerlessFallback) {
-      startServerlessMode();
+    console.warn('[SOCKET ERROR] Socket connection error:', error.message);
+  });
+}
+
+// Update Device Name Handler
+if (saveNameBtn && myDeviceNameInput) {
+  saveNameBtn.addEventListener('click', () => {
+    const newName = myDeviceNameInput.value.trim();
+    if (newName) {
+      currentDeviceName = newName;
+      localStorage.setItem('my_device_name', newName);
+      if (socket && socket.connected) {
+        socket.emit('set_device_name', { name: newName });
+      }
+      showToast('Device Name Updated', `This PC is now identified as "${newName}"`);
     }
   });
 
-  socket.on('client_count', (data) => {
-    console.log('[CLIENT COUNT]', data);
-    updateDeviceCount(data.count);
+  myDeviceNameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') saveNameBtn.click();
   });
+}
+
+// Render Online Devices Chips & Dropdown
+function renderOnlineDevices(devices) {
+  updateDeviceCount(devices.length);
+
+  // 1. Render Top Chips
+  if (onlineDevicesChips) {
+    if (devices.length === 0) {
+      onlineDevicesChips.innerHTML = '<span class="device-chip loading-chip">No other devices online</span>';
+    } else {
+      onlineDevicesChips.innerHTML = devices.map(d => {
+        const isSelf = socket && d.socketId === socket.id;
+        return `
+          <span class="device-chip ${isSelf ? 'chip-self' : ''}" title="IP: ${d.ip} | ID: ${d.socketId}">
+            <strong>${escapeHtml(d.name)}</strong> ${isSelf ? '(You)' : ''}
+          </span>
+        `;
+      }).join('');
+    }
+  }
+
+  // 2. Update Target Dropdown in Send Section
+  if (targetRecipientSelect) {
+    const currentSelected = targetRecipientSelect.value;
+    let html = '<option value="all">📢 Broadcast to All Online Devices</option>';
+
+    devices.forEach(d => {
+      const isSelf = socket && d.socketId === socket.id;
+      html += `
+        <option value="${d.socketId}" ${currentSelected === d.socketId ? 'selected' : ''}>
+          🎯 ${escapeHtml(d.name)} ${isSelf ? '(This PC)' : `[${d.ip}]`}
+        </option>
+      `;
+    });
+
+    targetRecipientSelect.innerHTML = html;
+  }
 }
 
 function updateDeviceCount(count) {
@@ -224,7 +297,8 @@ if (testPopupBtn) {
 // ==========================================
 async function sendNotification() {
   const message = messageInput.value.trim() || 'Hello! This notification was sent from another PC.';
-  const sender = senderNameInput.value.trim() || 'PC A';
+  const sender = currentDeviceName || 'PC A';
+  const targetSocketId = targetRecipientSelect ? targetRecipientSelect.value : 'all';
 
   if (useServerlessFallback || !socket || !socket.connected) {
     // Send via Serverless REST API
@@ -232,7 +306,7 @@ async function sendNotification() {
       const res = await fetch('/api', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, sender })
+        body: JSON.stringify({ message, sender, targetSocketId })
       });
       if (res.ok) {
         const data = await res.json();
@@ -247,7 +321,8 @@ async function sendNotification() {
     // Emit 'send-notification' event to the Socket.IO server
     socket.emit('send-notification', {
       message: message,
-      sender: sender
+      sender: sender,
+      targetSocketId: targetSocketId
     });
   }
 
@@ -283,8 +358,19 @@ document.querySelectorAll('.tag-btn').forEach((btn) => {
 });
 
 // ==========================================
-// 4. Receive Notification Flow (PC B)
+// 4. Receive & Persist Notification Flow
 // ==========================================
+let savedNotifications = JSON.parse(localStorage.getItem('saved_notifications') || '[]');
+
+function loadSavedNotifications() {
+  if (savedNotifications && savedNotifications.length > 0) {
+    if (emptyState) emptyState.style.display = 'none';
+    savedNotifications.forEach(item => {
+      renderNotificationCard(item.data, item.isSender, false);
+    });
+  }
+}
+
 const handleIncomingNotification = (data) => {
   console.log('\n[EVENT RECEIVED] Notification payload:', data);
   
@@ -292,12 +378,12 @@ const handleIncomingNotification = (data) => {
     debugLastEvent.textContent = `Received: "${data.message}" from ${data.sender} (${data.timestamp})`;
   }
 
-  const isSender = data.senderSocketId && data.senderSocketId === socket.id;
+  const isSender = data.senderSocketId && socket && data.senderSocketId === socket.id;
 
-  // 1. Add notification card to web page list on BOTH PC A and PC B
+  // 1. Add notification card to web page list & save to localStorage
   addNotificationCard(data, isSender);
 
-  // 2. Always show an on-screen toast popup on PC B
+  // 2. Always show an on-screen toast popup on receiver
   if (!isSender) {
     showToast(`🔔 ${data.sender || 'Remote PC'}`, data.message);
   }
@@ -309,10 +395,21 @@ const handleIncomingNotification = (data) => {
 };
 
 // Listen to all possible event names
-socket.on('notification', handleIncomingNotification);
-socket.on('receive_notification', handleIncomingNotification);
+if (socket) {
+  socket.on('notification', handleIncomingNotification);
+  socket.on('receive_notification', handleIncomingNotification);
+}
 
 function addNotificationCard(data, isSender = false) {
+  // Save to localStorage (keep last 50)
+  savedNotifications.unshift({ data, isSender });
+  if (savedNotifications.length > 50) savedNotifications.pop();
+  localStorage.setItem('saved_notifications', JSON.stringify(savedNotifications));
+
+  renderNotificationCard(data, isSender, true);
+}
+
+function renderNotificationCard(data, isSender = false, isNew = false) {
   if (emptyState && emptyState.parentNode) {
     emptyState.style.display = 'none';
   }
@@ -345,11 +442,14 @@ function addNotificationCard(data, isSender = false) {
   card.appendChild(meta);
   card.appendChild(body);
 
-  // Prepend to show newest at top
-  notificationsList.insertBefore(card, notificationsList.firstChild);
+  if (isNew) {
+    notificationsList.insertBefore(card, notificationsList.firstChild);
+  } else {
+    notificationsList.appendChild(card);
+  }
 }
 
-// In-App Toast Popup (Visual overlay on page that guarantees on-screen popup)
+// In-App Toast Popup
 function showToast(title, message) {
   let toastContainer = document.getElementById('toastContainer');
   if (!toastContainer) {
@@ -371,7 +471,6 @@ function showToast(title, message) {
 
   toastContainer.appendChild(toast);
 
-  // Auto remove toast after 6 seconds
   setTimeout(() => {
     toast.classList.add('fade-out');
     setTimeout(() => {
@@ -380,7 +479,7 @@ function showToast(title, message) {
   }, 6000);
 }
 
-// Audio Chime using Web Audio API (Synthesizer)
+// Audio Chime
 function playNotificationSound() {
   try {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -410,29 +509,18 @@ function playNotificationSound() {
     gain2.connect(ctx.destination);
     osc2.start(ctx.currentTime + 0.1);
     osc2.stop(ctx.currentTime + 0.5);
-  } catch (err) {
-    // Autoplay policy fallback
-  }
+  } catch (err) {}
 }
 
 async function triggerBrowserNotification(data) {
-  // 1. Play sound chime
   playNotificationSound();
 
-  if (!('Notification' in window)) {
-    console.warn('[NOTIF] Desktop Notifications are not supported in this browser.');
-    return;
-  }
-
-  if (Notification.permission !== 'granted') {
-    console.warn('[NOTIF] Cannot show native popup: Notification.permission is', Notification.permission);
-    return;
-  }
+  if (!('Notification' in window)) return;
+  if (Notification.permission !== 'granted') return;
 
   const title = data.title || '🔔 New Notification';
   const bodyText = `${data.sender ? data.sender + ': ' : ''}${data.message}`;
 
-  // Safe options for Windows Toast Notifications (PNG icon only, no SVGs)
   const options = {
     body: bodyText,
     icon: '/icon.png',
@@ -443,7 +531,6 @@ async function triggerBrowserNotification(data) {
     silent: false
   };
 
-  // Method 1: Try Service Worker showNotification (Windows Action Center integration)
   if ('serviceWorker' in navigator) {
     try {
       const reg = await navigator.serviceWorker.ready;
@@ -452,12 +539,9 @@ async function triggerBrowserNotification(data) {
         console.log('[NOTIF] ✓ Displayed via ServiceWorker.showNotification');
         return;
       }
-    } catch (swErr) {
-      console.warn('[NOTIF] ServiceWorker showNotification failed:', swErr);
-    }
+    } catch (swErr) {}
   }
 
-  // Method 2: Standard Notification constructor fallback
   try {
     const notif = new Notification(title, {
       body: bodyText,
@@ -467,10 +551,7 @@ async function triggerBrowserNotification(data) {
       window.focus();
       notif.close();
     };
-    console.log('[NOTIF] ✓ Displayed via Notification constructor');
   } catch (err) {
-    console.error('[NOTIF] Error creating Notification constructor:', err);
-    // Extreme fallback: no options
     try {
       new Notification(title, { body: bodyText });
     } catch (e) {}
@@ -479,6 +560,8 @@ async function triggerBrowserNotification(data) {
 
 // Clear List Action
 clearListBtn.addEventListener('click', () => {
+  savedNotifications = [];
+  localStorage.removeItem('saved_notifications');
   notificationsList.innerHTML = '';
   if (emptyState) {
     emptyState.style.display = 'block';
@@ -504,5 +587,6 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// Check notification permission on page load
+// Load previous history & check permissions
+loadSavedNotifications();
 updatePermissionStatus();

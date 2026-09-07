@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PC-to-PC Notification POC - Receiver</title>
-  <link rel="stylesheet" href="style.css?v=2.0">
+  <link rel="stylesheet" href="style.css?v=3.0">
   <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
@@ -38,22 +38,24 @@
       </div>
     </header>
 
-    <div id="alertBanner" class="alert-banner hidden"></div>
+    <div class="device-bar">
+      <div class="my-device-config">
+        <label for="myDeviceName">💻 This Device Name:</label>
+        <div class="name-input-group">
+          <input type="text" id="myDeviceName" placeholder="e.g. PC B (Receiver)" />
+          <button id="saveNameBtn" class="btn btn-xs btn-outline">Save</button>
+        </div>
+      </div>
 
-    <div class="debug-strip">
-      <div class="debug-item">
-        <span class="debug-label">Socket ID:</span>
-        <code id="debugSocketId">connecting...</code>
-      </div>
-      <div class="debug-item">
-        <span class="debug-label">Transport:</span>
-        <code id="debugTransport">polling</code>
-      </div>
-      <div class="debug-item debug-event-item">
-        <span class="debug-label">Last Stream Event:</span>
-        <span id="debugLastEvent">Listening for events...</span>
+      <div class="online-devices-section">
+        <span class="online-label">Active Online Devices:</span>
+        <div id="onlineDevicesChips" class="devices-chips">
+          <span class="device-chip loading-chip">Searching for connected devices...</span>
+        </div>
       </div>
     </div>
+
+    <div id="alertBanner" class="alert-banner hidden"></div>
 
     <main class="main-grid">
       <section class="section-card sender-section">
@@ -61,8 +63,15 @@
           <div class="icon-bubble icon-sender">📤</div>
           <div>
             <h2>Send Notification</h2>
-            <p class="section-desc">Broadcast an instant alert to other PCs</p>
+            <p class="section-desc">Broadcast or target a specific connected PC</p>
           </div>
+        </div>
+
+        <div class="form-group">
+          <label for="targetRecipientSelect">🎯 Send To (Recipient Device):</label>
+          <select id="targetRecipientSelect" class="form-select">
+            <option value="all">📢 Broadcast to All Online Devices</option>
+          </select>
         </div>
 
         <div class="form-group">
@@ -73,15 +82,6 @@
             value="Hello from Receiver PC!" 
             placeholder="Type your message here..."
             autocomplete="off"
-          />
-        </div>
-
-        <div class="form-group">
-          <label for="senderNameInput">Sender Name (Optional)</label>
-          <input 
-            type="text" 
-            id="senderNameInput" 
-            placeholder="e.g. PC B"
           />
         </div>
 
@@ -96,9 +96,9 @@
           <div class="receiver-title-area">
             <div>
               <h2>Received Notifications</h2>
-              <p class="section-desc">Real-time incoming alerts from Socket.IO</p>
+              <p class="section-desc">Real-time incoming alerts (Saved locally)</p>
             </div>
-            <button id="clearListBtn" class="btn btn-xs btn-text">Clear</button>
+            <button id="clearListBtn" class="btn btn-xs btn-text">Clear History</button>
           </div>
         </div>
 
@@ -106,7 +106,7 @@
           <div id="emptyState" class="empty-state">
             <div class="empty-icon">📭</div>
             <p>No notifications received yet.</p>
-            <span>Messages sent from PC A will appear here instantly.</span>
+            <span>Messages sent to this PC will appear here instantly.</span>
           </div>
         </div>
       </section>
@@ -114,6 +114,6 @@
   </div>
 
   <div id="toastContainer" class="toast-container"></div>
-  <script src="app.js?v=2.0"></script>
+  <script src="app.js?v=3.0"></script>
 </body>
 </html>

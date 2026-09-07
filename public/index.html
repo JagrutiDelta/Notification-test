@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PC-to-PC Notification POC</title>
-  <link rel="stylesheet" href="style.css?v=2.0">
+  <link rel="stylesheet" href="style.css?v=3.0">
   <!-- Socket.IO Client Library -->
   <script src="/socket.io/socket.io.js"></script>
 </head>
@@ -41,6 +41,24 @@
       </div>
     </header>
 
+    <!-- My Device Name & Online Devices Strip -->
+    <div class="device-bar">
+      <div class="my-device-config">
+        <label for="myDeviceName">💻 This Device Name:</label>
+        <div class="name-input-group">
+          <input type="text" id="myDeviceName" placeholder="e.g. PC A (Host)" />
+          <button id="saveNameBtn" class="btn btn-xs btn-outline">Save</button>
+        </div>
+      </div>
+
+      <div class="online-devices-section">
+        <span class="online-label">Active Online Devices:</span>
+        <div id="onlineDevicesChips" class="devices-chips">
+          <span class="device-chip loading-chip">Searching for connected devices...</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Alert / System Notice Banner (if any) -->
     <div id="alertBanner" class="alert-banner hidden"></div>
 
@@ -68,8 +86,16 @@
           <div class="icon-bubble icon-sender">📤</div>
           <div>
             <h2>Send Notification</h2>
-            <p class="section-desc">Broadcast an instant alert to PC B</p>
+            <p class="section-desc">Broadcast or target a specific connected PC</p>
           </div>
+        </div>
+
+        <!-- Target Recipient Dropdown -->
+        <div class="form-group">
+          <label for="targetRecipientSelect">🎯 Send To (Recipient Device):</label>
+          <select id="targetRecipientSelect" class="form-select">
+            <option value="all">📢 Broadcast to All Online Devices</option>
+          </select>
         </div>
 
         <div class="form-group">
@@ -80,15 +106,6 @@
             value="Hello! This notification was sent from another PC." 
             placeholder="Type your message here..."
             autocomplete="off"
-          />
-        </div>
-
-        <div class="form-group">
-          <label for="senderNameInput">Sender Name / PC Label (Optional)</label>
-          <input 
-            type="text" 
-            id="senderNameInput" 
-            placeholder="e.g. PC A (Office)"
           />
         </div>
 
@@ -113,9 +130,9 @@
           <div class="receiver-title-area">
             <div>
               <h2>Received Notifications</h2>
-              <p class="section-desc">Real-time incoming alerts from Socket.IO</p>
+              <p class="section-desc">Real-time incoming alerts (Saved locally)</p>
             </div>
-            <button id="clearListBtn" class="btn btn-xs btn-text">Clear</button>
+            <button id="clearListBtn" class="btn btn-xs btn-text">Clear History</button>
           </div>
         </div>
 
@@ -123,7 +140,7 @@
           <div id="emptyState" class="empty-state">
             <div class="empty-icon">📭</div>
             <p>No notifications received yet.</p>
-            <span>Messages sent from any connected PC will appear here instantly.</span>
+            <span>Messages sent to this PC will appear here instantly.</span>
           </div>
         </div>
       </section>
@@ -152,21 +169,21 @@
     <footer class="app-footer">
       <div class="footer-step">
         <span class="step-num">1</span>
-        <span>Open on <strong>PC A</strong> & <strong>PC B</strong> via HTTPS LAN IP</span>
+        <span>Set your PC Name above & see online devices</span>
       </div>
       <div class="footer-step">
         <span class="step-num">2</span>
-        <span>Click <strong>Enable Notifications</strong> on PC B</span>
+        <span>Select target in dropdown (or Broadcast to All)</span>
       </div>
       <div class="footer-step">
         <span class="step-num">3</span>
-        <span>Click <strong>Send Notification</strong> on PC A</span>
+        <span>Click <strong>Send Notification</strong></span>
       </div>
     </footer>
   </div>
 
   <div id="toastContainer" class="toast-container"></div>
 
-  <script src="app.js?v=2.0"></script>
+  <script src="app.js?v=3.0"></script>
 </body>
 </html>

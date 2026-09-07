@@ -53,7 +53,7 @@ app.get(['/receiver', '/sender'], (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Create Server (HTTPS for local with certs, HTTP for Cloud/Vercel/Render where cloud handles SSL)
+// Create Server
 let server;
 if (!isVercel && hasLocalCerts) {
   try {
@@ -72,7 +72,7 @@ if (!isVercel && hasLocalCerts) {
   console.log('[INFO] Starting standard HTTP server (Cloud/Proxy handles SSL).');
 }
 
-// Initialize Socket.IO with CORS and robust polling/websocket transports
+// Initialize Socket.IO
 const io = new Server(server, {
   cors: {
     origin: '*',
@@ -96,30 +96,71 @@ function getLocalIPAddresses() {
   return addresses;
 }
 
-function broadcastClientCount() {
-  if (io && io.engine) {
-    const count = io.engine.clientsCount;
-    io.emit('client_count', { count });
+// Active connected devices registry
+const connectedDevices = new Map();
+
+function broadcastOnlineDevices() {
+  if (!io) return;
+  const devicesList = [];
+  for (const [socketId, dev] of connectedDevices.entries()) {
+    devicesList.push({
+      socketId: socketId,
+      name: dev.name,
+      ip: dev.ip,
+      connectedAt: dev.connectedAt
+    });
   }
+  
+  io.emit('online_devices', {
+    count: devicesList.length,
+    devices: devicesList
+  });
+  io.emit('client_count', { count: devicesList.length });
 }
 
 // Socket.IO real-time event handling
 io.on('connection', (socket) => {
-  const clientIp = socket.handshake.address;
-  const total = io.engine ? io.engine.clientsCount : 1;
-  console.log(`\n[+] Client Connected: ${socket.id} | IP: ${clientIp} | Total Online: ${total}`);
-  
+  const clientIp = socket.handshake.address.replace('::ffff:', '');
+  const isLocal = clientIp === '127.0.0.1' || clientIp === '::1';
+  const defaultName = isLocal ? 'PC A (Host)' : `PC (${socket.id.substring(0, 4)})`;
+
+  // Register device
+  connectedDevices.set(socket.id, {
+    name: defaultName,
+    ip: clientIp,
+    connectedAt: new Date().toLocaleTimeString()
+  });
+
+  console.log(`\n[+] Client Connected: ${socket.id} (${defaultName}) | IP: ${clientIp} | Total: ${connectedDevices.size}`);
+
   socket.emit('connection_ack', {
     socketId: socket.id,
+    assignedName: defaultName,
     clientIp: clientIp,
-    totalClients: total,
+    totalClients: connectedDevices.size,
     serverTime: new Date().toLocaleTimeString()
   });
 
-  broadcastClientCount();
+  // Broadcast updated list to everyone
+  broadcastOnlineDevices();
 
+  // Allow client to update their friendly device name
+  socket.on('set_device_name', (data) => {
+    if (data && data.name) {
+      const dev = connectedDevices.get(socket.id) || {};
+      dev.name = data.name.trim();
+      connectedDevices.set(socket.id, dev);
+      console.log(`[i] Renamed socket ${socket.id} -> "${dev.name}"`);
+      broadcastOnlineDevices();
+    }
+  });
+
+  // Notification Handler (Supports Broadcast and Targeted 1-to-1)
   const handleSendNotification = (data) => {
-    const totalClients = io.engine ? io.engine.clientsCount : 1;
+    const senderDev = connectedDevices.get(socket.id);
+    const senderName = (data && data.sender) ? data.sender : (senderDev ? senderDev.name : `PC (${socket.id.substring(0, 4)})`);
+    const targetSocketId = data ? data.targetSocketId : 'all';
+    
     const now = new Date();
     const timestamp = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     
@@ -127,21 +168,31 @@ io.on('connection', (socket) => {
       id: 'notif_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
       title: '🔔 New Notification',
       message: (data && data.message) ? data.message : 'Hello! This notification was sent from another PC.',
-      sender: (data && data.sender) ? data.sender : `PC (${socket.id.substring(0, 5)})`,
+      sender: senderName,
       senderSocketId: socket.id,
+      targetSocketId: targetSocketId,
       timestamp: timestamp,
       serverTime: timestamp
     };
 
     console.log(`\n================ NOTIFICATION EVENT ================`);
-    console.log(`[>] From Client   : ${socket.id} (${clientIp})`);
-    console.log(`[>] Message       : "${payload.message}"`);
-    console.log(`[>] Broadcasting to: ${totalClients} connected client(s)`);
+    console.log(`[>] From: ${senderName} (${socket.id})`);
+    console.log(`[>] To  : ${targetSocketId === 'all' ? 'All Online Devices (Broadcast)' : `Specific Device: ${targetSocketId}`}`);
+    console.log(`[>] Msg : "${payload.message}"`);
 
-    io.emit('notification', payload);
-    io.emit('receive_notification', payload);
-    
-    console.log(`[✓] Broadcast completed.`);
+    if (!targetSocketId || targetSocketId === 'all') {
+      // Broadcast to EVERY connected client
+      io.emit('notification', payload);
+      io.emit('receive_notification', payload);
+      console.log(`[✓] Broadcasted to all ${connectedDevices.size} connected device(s).`);
+    } else {
+      // 🎯 TARGETED 1-to-1: Send ONLY to target device and echo back to sender
+      io.to(targetSocketId).emit('notification', payload);
+      if (targetSocketId !== socket.id) {
+        socket.emit('notification', payload); // So sender sees card in their own sent list
+      }
+      console.log(`[✓] Sent directly to target device (${targetSocketId}).`);
+    }
     console.log(`====================================================\n`);
   };
 
@@ -150,12 +201,14 @@ io.on('connection', (socket) => {
   socket.on('message', handleSendNotification);
 
   socket.on('disconnect', (reason) => {
-    console.log(`[-] Client Disconnected: ${socket.id} | Reason: ${reason}`);
-    broadcastClientCount();
+    const dev = connectedDevices.get(socket.id);
+    console.log(`[-] Client Disconnected: ${socket.id} (${dev ? dev.name : 'Unknown'}) | Reason: ${reason}`);
+    connectedDevices.delete(socket.id);
+    broadcastOnlineDevices();
   });
 });
 
-// Start Server if not imported as serverless function
+// Start Server
 if (!isVercel) {
   server.listen(PORT, '0.0.0.0', () => {
     const localIPs = getLocalIPAddresses();
@@ -176,5 +229,5 @@ if (!isVercel) {
   });
 }
 
-// Export for Vercel / Serverless environments
+// Export for Vercel
 module.exports = app;
